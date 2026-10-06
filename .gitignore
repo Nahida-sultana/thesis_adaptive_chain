@@ -1,4 +1,4 @@
-﻿node_modules/
+node_modules/
 cache/
 artifacts/
 coverage/
@@ -9,3 +9,6 @@ coverage/
 .idea/
 dist/
 build/
+.venv/
+__pycache__/
+*.pyc

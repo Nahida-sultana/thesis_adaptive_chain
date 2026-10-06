@@ -1,0 +1,11 @@
+function,calls,avgGas,maxGas
+createShard,3,58550,69950
+depositReward,3,60312,71704
+contribute,13,208402,258323
+forceAdvanceEpoch,1,57633,57633
+claimReward,4,88672,101495
+claimRebate,4,73070,73070
+batchClaim,1,256036,256036
+registerWithDeviceAttestation,1,101473,101473
+contributeWithProof,1,145869,145869
+performUpkeep,1,59035,59035
