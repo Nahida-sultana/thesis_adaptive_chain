@@ -1,0 +1,5 @@
+function,calls,avgGas,maxGas
+contribute,9,252164,305364
+forceAdvanceEpoch,2,69096,69096
+claimReward,9,92046,105428
+claimRebate,9,72948,72948

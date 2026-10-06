@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FairMetaChain Pilot</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.0/dist/ethers.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; padding: 2rem; }
+    h1 { color: #38bdf8; margin-bottom: 0.5rem; }
+    h2 { color: #94a3b8; font-size: 1.1rem; margin: 1.5rem 0 0.75rem; }
+    .card { background: #1e293b; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; border: 1px solid #334155; }
+    .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .row > * { flex: 1; min-width: 200px; }
+    label { display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.25rem; }
+    input, select { width: 100%; padding: 0.6rem; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; margin-bottom: 0.75rem; }
+    button { background: #38bdf8; color: #0f172a; border: none; padding: 0.7rem 1.2rem; border-radius: 8px; font-weight: 600; cursor: pointer; margin-right: 0.5rem; margin-top: 0.5rem; }
+    button:hover { background: #7dd3fc; }
+    button.secondary { background: #475569; color: #e2e8f0; }
+    button.secondary:hover { background: #64748b; }
+    #status { margin-top: 1rem; padding: 0.75rem; border-radius: 8px; background: #1e293b; font-family: monospace; font-size: 0.9rem; white-space: pre-wrap; min-height: 60px; }
+    .badge { display: inline-block; background: #334155; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.8rem; margin-right: 0.4rem; }
+    .ok { color: #4ade80; }
+    .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>FairMetaChain Pilot</h1>
+  <p style="color:#94a3b8;margin-bottom:1.5rem;">Local testnet dashboard – connect with MetaMask or use injected provider</p>
+
+  <div class="card">
+    <button id="btnConnect">Connect Wallet</button>
+    <button id="btnRefresh" class="secondary">Refresh State</button>
+    <span id="walletInfo" class="badge" style="margin-left:1rem;">Not connected</span>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h2>Shards</h2>
+      <div id="shards">–</div>
+    </div>
+    <div class="card">
+      <h2>Your Info</h2>
+      <div id="userInfo">–</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Contribute Resources</h2>
+    <label>Shard ID</label>
+    <select id="shardId"><option value="0">0</option><option value="1">1</option><option value="2">2</option></select>
+    <label>Amount (tokens)</label>
+    <input id="amount" type="number" value="50" />
+    <label>Gas Units</label>
+    <input id="gasUnits" type="number" value="5" />
+    <button id="btnContribute">Contribute</button>
+  </div>
+
+  <div class="card">
+    <h2>Claim</h2>
+    <label>Epoch</label>
+    <input id="claimEpoch" type="number" value="1" />
+    <button id="btnClaimReward">Claim Reward (all shards)</button>
+    <button id="btnClaimRebate" class="secondary">Claim Rebate</button>
+  </div>
+
+  <div class="card">
+    <h2>MSP Actions (owner only)</h2>
+    <button id="btnAdvance" class="secondary">Force Advance Epoch</button>
+  </div>
+
+  <div id="status">Ready.</div>
+
+  <script>
+    // Addresses from latest deployment – change if you redeploy
+    const TOKEN_ADDR = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
+    const FMC_ADDR   = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
+
+    const FMC_ABI = [
+      "function getShard(uint256) view returns (uint256 rewardPool, uint256 gasPrice, uint256 totalContributed, uint256 alpha, bool active)",
+      "function getUserInfo(address) view returns (uint256 reputation, uint256 totalContributedAllTime)",
+      "function currentEpoch() view returns (uint256)",
+      "function shardCount() view returns (uint256)",
+      "function contribute(uint256 shardId, uint256 amount, uint256 gasUnits)",
+      "function claimReward(uint256 epoch, uint256 shardId)",
+      "function claimRebate(uint256 epoch)",
+      "function forceAdvanceEpoch()",
+      "function rewardToken() view returns (address)"
+    ];
+    const ERC20_ABI = [
+      "function approve(address spender, uint256 amount) returns (bool)",
+      "function balanceOf(address) view returns (uint256)",
+      "function allowance(address owner, address spender) view returns (uint256)"
+    ];
+
+    let provider, signer, fmc, token, userAddr;
+
+    const status = (msg, ok=true) => {
+      document.getElementById("status").innerHTML = `<span class="${ok?"ok":"err"}">${msg}</span>`;
+    };
+
+    async function connect() {
+      if (!window.ethereum) { status("No wallet found. Use Hardhat accounts or install MetaMask.", false); return; }
+
+      // Auto switch / add Hardhat Local network (chainId 31337 = 0x7a69)
+      try {
+        await window.ethereum.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: "0x7a69" }]
+        });
+      } catch (e) {
+        if (e.code === 4902) {
+          await window.ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [{
+              chainId: "0x7a69",
+              chainName: "Hardhat Local",
+              rpcUrls: ["http://127.0.0.1:8545"],
+              nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 }
+            }]
+          });
+        } else {
+          status("Network switch failed: " + (e.message || e), false);
+          return;
+        }
+      }
+
+      provider = new ethers.BrowserProvider(window.ethereum);
+      await provider.send("eth_requestAccounts", []);
+      signer = await provider.getSigner();
+      userAddr = await signer.getAddress();
+      fmc = new ethers.Contract(FMC_ADDR, FMC_ABI, signer);
+      token = new ethers.Contract(TOKEN_ADDR, ERC20_ABI, signer);
+      document.getElementById("walletInfo").textContent = userAddr.slice(0,8) + "..." + userAddr.slice(-4);
+      status("Connected: " + userAddr);
+      await refresh();
+    }
+
+    async function refresh() {
+      if (!fmc) return;
+      try {
+        const epoch = await fmc.currentEpoch();
+        let html = `<div class="badge">Epoch ${epoch}</div><br/><br/>`;
+        for (let i = 0; i < 3; i++) {
+          const s = await fmc.getShard(i);
+          html += `<div style="margin-bottom:0.5rem">
+            <b>Shard ${i}</b> – Pool: ${ethers.formatEther(s.rewardPool)} | 
+            Contributed: ${ethers.formatEther(s.totalContributed)} | 
+            Gas: ${ethers.formatEther(s.gasPrice)} | 
+            α: ${s.alpha}</div>`;
+        }
+        document.getElementById("shards").innerHTML = html;
+
+        const info = await fmc.getUserInfo(userAddr);
+        const bal = await token.balanceOf(userAddr);
+        document.getElementById("userInfo").innerHTML = `
+          Reputation: <b>${info.reputation}</b><br/>
+          Total Contributed: <b>${ethers.formatEther(info.totalContributedAllTime)}</b><br/>
+          Token Balance: <b>${ethers.formatEther(bal)}</b>`;
+      } catch (e) {
+        status("Refresh failed: " + (e.shortMessage || e.message), false);
+      }
+    }
+
+    async function contribute() {
+      try {
+        const shardId = +document.getElementById("shardId").value;
+        const amount = ethers.parseEther(document.getElementById("amount").value);
+        const gasUnits = ethers.parseEther(document.getElementById("gasUnits").value);
+        status("Approving tokens...");
+        await (await token.approve(FMC_ADDR, amount + gasUnits * 2n)).wait();
+        status("Contributing...");
+        await (await fmc.contribute(shardId, amount, gasUnits)).wait();
+        status("Contribution successful!");
+        await refresh();
+      } catch (e) {
+        status("Contribute failed: " + (e.shortMessage || e.message), false);
+      }
+    }
+
+    async function claimRewards() {
+  const epoch = +document.getElementById("claimEpoch").value;
+  let log = [];
+  for (let s = 0; s < 3; s++) {
+    try {
+      status(`Claiming shard ${s}...`);
+      await (await fmc.claimReward(epoch, s)).wait();
+      log.push(`Shard ${s}: claimed ✅`);
+    } catch (e) {
+      log.push(`Shard ${s}: ${e.shortMessage || e.reason || e.message}`);
+    }
+  }
+  status(log.join("<br/>"));
+  await refresh();
+}
+    async function claimRebate() {
+      const epoch = +document.getElementById("claimEpoch").value;
+      status("Claiming rebate...");
+      try {
+        await (await fmc.claimRebate(epoch)).wait();
+        status("Rebate claimed!");
+      } catch(e) { status("Rebate claim failed: " + e.message, false); }
+      await refresh();
+    }
+
+    async function advance() {
+      status("Advancing epoch...");
+      try {
+        await (await fmc.forceAdvanceEpoch()).wait();
+        status("Epoch advanced!");
+      } catch(e) { status("Only owner can advance: " + e.message, false); }
+      await refresh();
+    }
+
+    document.getElementById("btnConnect").onclick = connect;
+    document.getElementById("btnRefresh").onclick = refresh;
+    document.getElementById("btnContribute").onclick = contribute;
+    document.getElementById("btnClaimReward").onclick = claimRewards;
+    document.getElementById("btnClaimRebate").onclick = claimRebate;
+    document.getElementById("btnAdvance").onclick = advance;
+  </script>
+</body>
+</html>
